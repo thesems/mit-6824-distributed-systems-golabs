@@ -23,6 +23,16 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
+type GetTaskArgs struct {}
+
+type GetTaskReply struct {
+    // type of task: none (0), map (1), reduce(2)
+    // if none (0), worker should exit
+	Task_type int
+    // structured in a JSON file in format:
+    // ```json [<a list of paths to inputs or intermediate outputs>]```
+	Data string
+}
 
 
 // Cook up a unique-ish UNIX-domain socket name

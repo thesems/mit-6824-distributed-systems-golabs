@@ -32,10 +32,27 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+    CallGetTask()
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
+}
+
+//
+// Asks for a new task from the coordinator.
+// Task can be either a Map or Reduce task.
+// If no task is available yet, it returns an empty JSON file.
+//
+func CallGetTask() {
+    var args GetTaskArgs 
+    var reply GetTaskReply 
+	ok := call("Coordinator.GetTask", &args, &reply)
+	if ok {
+        fmt.Printf("reply: %d/%v\n", reply.Task_type, reply.Data)
+	} else {
+		fmt.Printf("call failed!\n")
+	}
 }
 
 //
