@@ -12,13 +12,20 @@ import (
 	"time"
 )
 
+type Task struct {
+    Filename string
+    // 0 - not started, 1 - in progress, 2 - finished
+    Status int
+}
+
 type Coordinator struct {
 	// Your definitions here.
 	// map = 0, reduce = 1, done = 2
 	phase        int
-	inputs       []string
+	inputs       []string // replace with Task
 	intermediate []KeyValue
 	mu           sync.Mutex
+    nReduce      int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -34,41 +41,34 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 
 	if c.phase == 0 {
 		if len(c.inputs) > 0 {
-			reply.Task_type = 1
+			reply.TaskType = 1
 			job := c.inputs[len(c.inputs)-1]
-			reply.Data = fmt.Sprintf(`["%s"]`, job)
+			reply.TaskFile = fmt.Sprintf(`["%s"]`, job)
 			c.inputs = c.inputs[:len(c.inputs)-1]
+            reply.NReduce = c.nReduce
 		} else {
 			fmt.Println("Ran out of inputs elements but reduce phase is not started yet.")
-			reply.Task_type = 0
-			reply.Data = "[]"
+			reply.TaskType = 0
+			reply.TaskFile = "[]"
 		}
 	} else if c.phase == 1 {
 		if len(c.intermediate) > 0 {
-			reply.Task_type = 2
+			reply.TaskType = 2
 			job := c.intermediate[len(c.inputs)-1]
-			reply.Data = fmt.Sprintf(`["%s"]`, job)
+			reply.TaskFile = fmt.Sprintf(`["%s"]`, job)
 			c.intermediate = c.intermediate[:len(c.intermediate)-1]
 		} else {
             c.phase = 2
-			reply.Task_type = 0
-			reply.Data = "[]"
+			reply.TaskType = 0
+			reply.TaskFile = "[]"
 			fmt.Println("Ran out of inputs and intermediate elements.")
 		}
 	} else {
-        reply.Task_type = 0
-        reply.Data = "[]"
+        reply.TaskType = 0
+        reply.TaskFile = "[]"
         fmt.Println("Done.")
     }
 
-	return nil
-}
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
 	return nil
 }
 
@@ -134,6 +134,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		phase: 0,
 		inputs:               inputs,
 		intermediate:         nil,
+        nReduce: nReduce,
 	}
 	c.server()
     c.monitor()
