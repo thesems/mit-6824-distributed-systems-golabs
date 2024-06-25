@@ -2,25 +2,31 @@
 
 ## Map-Reduce: Lab 1
 
-Worker tasks:
-- Worker request a job from the master (via RPC).
-- Once received, executes the job.
-- Upon finishing, sends a completion message to master, which includes:
-    - message itself implies that job has finished
-    - if map task:
-        - write key-value pairs to a JSON file (locally).
-        - Include filename to the message.
-        - Create file as temporary first (os.CreateTemp), rename atomically upon finishing (os.Rename).
-        - Filename: mr-X-Y, where X = unique ID, Y = reduce job id.
-        - Unique ID is defined by master (simple index of the file).
-        - Reduce job id can be obtained by using the ihash function and modulo operator (nReduce variable).
-    - if reduce task:
-        - read intermediate file as specified by the job
-        - perform the reduce function
-        - save output file (first as temporary then atomically rename it)
-    
-Master tasks:
-- Obtain a list of files to operate on (called inputs).
-- Schedule mapping jobs (called upon an input) to workers.
-- If no response is received from the worker within 10 seconds, assign the same job to a different worker.
-    - implies of a method to track status type (not started, in-progress, finished)
+### Worker
+- Worker keeps requesting tasks from the coordinator in a loop.
+- As a response, the worker receives:
+    - task ID
+    - Task type: none, map, reduce or finish.
+    - File name(s)
+    - Map task number or reduce number
+    - Number of reduce jobs (in case of map task)
+- For map task, following tasks are done:
+    - the specified file is read
+    - parsed as JSON
+    - executed as parameters in map function
+    - output split in hash buckets and saved to intermediate files (temporary files)
+    - upon completion, files are renamed to mr-X-Y format
+- For reduce task, following tasks are done:
+    - the specified files are read and decoded as key-values
+    - sorted according to the key
+    - reduce function executed on same keys
+    - output saved to mr-out-{reduceBucket}
+- a task completion RPC is sent, which includes:
+    - either the intermediate files or output files
+
+### Coordinator
+- Load input files
+- Create map tasks based on the read input files
+- Assign map tasks to workers
+- Monitor currently assigned tasks and reassign timed-out tasks
+- Create reduce tasks based on intermediate files

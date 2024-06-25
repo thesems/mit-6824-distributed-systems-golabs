@@ -5,12 +5,21 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"sort"
+	"time"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -30,11 +39,11 @@ func perform_map(mapf func(string, string) []KeyValue, fileName string) []KeyVal
 	intermediate := []KeyValue{}
 	file, err := os.Open(fileName)
 	if err != nil {
-		log.Fatalf("cannot open %v", fileName)
+        log.Fatalf("Worker: Failed to open file %s.", fileName)
 	}
 	content, err := io.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", fileName)
+        log.Fatalf("Worker: cannot read %v", fileName)
 	}
 	file.Close()
 	kva := mapf(fileName, string(content))
@@ -42,119 +51,165 @@ func perform_map(mapf func(string, string) []KeyValue, fileName string) []KeyVal
 	return intermediate
 }
 
-func perform_reduce(reducef func(string, []string) string, filename string, reduceTask int) string {
-    file, err := os.Open(filename)
-    if err != nil {
-        fmt.Println("Failed to open the file")
-        return ""
-    }
-    
-    decoder := json.NewDecoder(file)
-    kvs := make([]KeyValue, 0)
+func perform_reduce(reducef func(string, []string) string, filenames []string, reduceTask int) string {
+	kvs := make(ByKey, 0)
+
+	for _, filename := range filenames {
+		file, err := os.Open(filename)
+		if err != nil {
+            log.Fatalf("Worker: Failed to open file %s", filename)
+		}
+
+		decoder := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := decoder.Decode(&kv); err != nil {
+				break
+			}
+			kvs = append(kvs, kv)
+		}
+	}
+
+	sort.Sort(kvs)
 
 	oname := fmt.Sprintf("mr-out-%d", reduceTask)
-	ofile, _ := os.Create(oname)
+	ofile, err := os.Create(oname)
+	if err != nil {
+        log.Panicf("Worker: Could not create a file: %s\n", oname)
+	}
 
-    for {
-        var kv KeyValue
-        if err := decoder.Decode(&kv); err != nil {
-            fmt.Println("Failed to decode a key/value.")
-            break
-        }
-        
-        if len(kvs) == 0 {
-            kvs = append(kvs, kv)
-            continue
-        }
-        
-        lastVal := kvs[len(kvs) - 1]
-        if lastVal.Key != kv.Key {
-            values := make([]string, 0)
-            for _, item := range kvs {
-                values = append(values, item.Value)
-            }
+	start := 0
+	for i, kv := range kvs {
+		if i == 0 {
+			continue
+		}
+		lastVal := kvs[i-1]
+		if lastVal.Key != kv.Key {
+			values := make([]string, 0)
+			for _, item := range kvs[start:i] {
+				values = append(values, item.Value)
+			}
 
-            output := reducef(lastVal.Key, values)
-		    fmt.Fprintf(ofile, "%v %v\n", lastVal.Key, output)
+			output := reducef(lastVal.Key, values)
+			fmt.Fprintf(ofile, "%v %v\n", lastVal.Key, output)
 
-            clear(kvs)
-            kvs = append(kvs, kv)
-        }
-    }
+			start = i
+		}
+		if i == len(kvs)-1 {
+			values := make([]string, 0)
+			for _, item := range kvs[start : i+1] {
+				values = append(values, item.Value)
+			}
+
+			output := reducef(kv.Key, values)
+			fmt.Fprintf(ofile, "%v %v\n", kv.Key, output)
+		}
+	}
+
+    fmt.Printf("Worker: reduce output file = %s\n", oname)
+	return oname
 }
 
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	reply := CallGetTask()
 
-	switch reply.TaskType {
-	case 0:
-		fmt.Println("Master does not have a task available.")
-		return
-	case 1:
-		kvs := perform_map(mapf, reply.TaskFile)
-		fileMap := make(map[int]*os.File)
+outerloop:
+	for {
+		reply, ok := CallGetTask()
+		if !ok {
+			return
+		}
 
-		for _, kv := range kvs {
-			key := ihash(kv.Key) % reply.NReduce
-			file, found := fileMap[key]
-			if !found {
-				tempFile, err := os.CreateTemp("", "intermediate")
-				if err != nil {
-					fmt.Println("Failed to create temp file")
-					continue
+        fmt.Printf("Worker: task=%s, type=%d, filenames=%s.\n", reply.TaskId, reply.TaskType, reply.TaskFile)
+
+		switch reply.TaskType {
+		case TaskTypeNone:
+            fmt.Println("Worker: no tasks currently available.")
+			break
+		case TaskTypeExit:
+            fmt.Println("Worker: all tasks finished.")
+			break outerloop
+		case TaskTypeMap:
+			kvs := perform_map(mapf, reply.TaskFile[0])
+			fileMap := make(map[int]*os.File)
+
+			for _, kv := range kvs {
+				key := ihash(kv.Key) % reply.NReduce
+				file, found := fileMap[key]
+				if !found {
+					tempFile, err := os.CreateTemp("", "intermediate")
+					if err != nil {
+                        fmt.Println("Worker: Failed to create temp file")
+						continue
+					}
+					fileMap[key] = tempFile
+					file = tempFile
 				}
-				fileMap[key] = tempFile
-				file = tempFile
+
+				enc := json.NewEncoder(file)
+				err := enc.Encode(kv)
+				if err != nil {
+                    fmt.Println("Worker: Failed to encode key-value as JSON.")
+				}
 			}
 
-			enc := json.NewEncoder(file)
-			err := enc.Encode(kv)
-			if err != nil {
-				fmt.Println("Failed to encode key-value as JSON.")
+			intermediates := make([]string, 0)
+			for key, file := range fileMap {
+				defer file.Close()
+
+				dirPath := filepath.Dir(file.Name())
+				oldFilePath := fmt.Sprintf("%s", file.Name())
+				newFilePath := fmt.Sprintf("%s/mr-%d-%d", dirPath, reply.MapReduceNum, key)
+
+				os.Rename(oldFilePath, newFilePath)
+				intermediates = append(intermediates, newFilePath)
 			}
+
+			ok := CallCompleteTask(reply.TaskId, intermediates)
+			if !ok {
+				return
+			}
+		case TaskTypeReduce:
+			out := perform_reduce(reducef, reply.TaskFile, reply.MapReduceNum)
+			ok := CallCompleteTask(reply.TaskId, []string{out})
+			if !ok {
+				return
+			}
+		default:
+            fmt.Println("Worker: Task type not recognized.")
 		}
 
-		for key, file := range fileMap {
-            defer file.Close()
-
-			fullPath, err := filepath.Abs(file.Name())
-			if err != nil {
-				fmt.Println("Failed to get full path of a file")
-				continue
-			}
-			newFileName := fmt.Sprintf("mr-%s-%d", reply.TaskId, key)
-			os.Rename(fullPath, newFileName)
-		}
-	case 3:
-		_ = perform_reduce(reducef, reply.TaskFile, reply.NReduce)
-	default:
-		fmt.Println("Task type not recognized.")
+		time.Sleep(1 * time.Second)
 	}
 }
 
 // Asks for a new task from the coordinator.
 // Task can be either a Map or Reduce task.
 // If no task is available yet, it returns an empty JSON file.
-func CallGetTask() GetTaskReply {
+func CallGetTask() (GetTaskReply, bool) {
 	var args GetTaskArgs
 	var reply GetTaskReply
 	ok := call("Coordinator.GetTask", &args, &reply)
 	if !ok {
-		fmt.Printf("call GetTask failed!\n")
+        fmt.Printf("Worker: call GetTask failed!\n")
+		return reply, false
 	}
-	return reply
+	return reply, true
 }
 
-func CallCompleteTask() CompleteTaskReply {
-	var args CompleteTaskArgs
+func CallCompleteTask(taskId string, fileNames []string) bool {
+	args := CompleteTaskArgs{
+		TaskId:    taskId,
+		FileNames: fileNames,
+	}
 	var reply CompleteTaskReply
 	ok := call("Coordinator.CompleteTask", &args, &reply)
 	if !ok {
-		fmt.Printf("call CompleteTask failed!\n")
+        fmt.Printf("Worker: call CompleteTask failed!\n")
+		return false
 	}
-	return reply
+	return true
 }
 
 // send an RPC request to the coordinator, wait for the response.
