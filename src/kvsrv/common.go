@@ -4,9 +4,8 @@ package kvsrv
 type PutAppendArgs struct {
 	Key   string
 	Value string
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Uid   string
+    Client string
 }
 
 type PutAppendReply struct {
@@ -15,7 +14,7 @@ type PutAppendReply struct {
 
 type GetArgs struct {
 	Key string
-	// You'll have to add definitions here.
+    Client string
 }
 
 type GetReply struct {

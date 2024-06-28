@@ -2,6 +2,7 @@ package kvsrv
 
 import (
 	"log"
+	"strings"
 	"sync"
 )
 
@@ -14,30 +15,71 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
-type KVServer struct {
-	mu sync.Mutex
-
-	// Your definitions here.
+type Request struct {
+	uid   string
+	reply string
 }
 
+type KVServer struct {
+	mu           sync.Mutex
+	data         map[string]string
+	completed    map[string]*Request
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+	value, found := kv.data[args.Key]
+	if !found {
+		reply.Value = ""
+		return
+	}
+
+	reply.Value = value
+    delete(kv.completed, args.Client)
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+    req, found := kv.completed[args.Client]
+    if found {
+       if req.uid == args.Uid {
+            return
+        }
+    }
+
+    kv.completed[args.Client] = &Request{uid: args.Uid, reply: ""}
+	kv.data[args.Key] = args.Value
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+
+    req, found := kv.completed[args.Client]
+    if found {
+       if req.uid == args.Uid {
+			reply.Value = req.reply
+            return
+        }
+    }
+
+	value, found := kv.data[args.Key]
+	if !found {
+		kv.data[args.Key] = ""
+	}
+
+	reply.Value = strings.Clone(value)
+    kv.completed[args.Client] = &Request{uid: args.Uid, reply: strings.Clone(value)}
+	kv.data[args.Key] += args.Value
 }
 
 func StartKVServer() *KVServer {
 	kv := new(KVServer)
-
-	// You may need initialization code here.
-
+	kv.data = make(map[string]string)
+	kv.completed = make(map[string]*Request)
 	return kv
 }

@@ -1,6 +1,6 @@
 # MIT 6.824 Distributed Systems
 
-## Map-Reduce: Lab 1
+## Lab 1: Map-Reduce 
 
 ### Worker
 - Worker keeps requesting tasks from the coordinator in a loop.
@@ -30,3 +30,9 @@
 - Assign map tasks to workers
 - Monitor currently assigned tasks and reassign timed-out tasks
 - Create reduce tasks based on intermediate files
+
+## Lab 2: Key/Value Server
+
+- Key/Value Server provides an in-memory storage in the form of a key/value pair.  
+- Handles concurrent access via a locking mechanism.  
+- Detects and drops duplicate requests, while keeping memory footprint minimal.  
